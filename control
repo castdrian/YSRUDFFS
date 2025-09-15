@@ -1,0 +1,9 @@
+Name: YouStopRotatingUpsideDownForFucksSake
+Description: Fix YouTube rotation
+Version: 1.0.0
+Package: dev.adrian.ysrudffs
+Architecture: iphoneos-arm
+Maintainer: Adrian Castro
+Author: Adrian Castro
+Section: Tweaks
+Depends: ellekit

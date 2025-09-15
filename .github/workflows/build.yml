@@ -1,0 +1,186 @@
+name: Build YSRUDFFS
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  precheck:
+    runs-on: macos-15
+    outputs:
+      should_run: ${{ steps.version-check.outputs.should_run }}
+      do_release: ${{ steps.version-check.outputs.do_release }}
+      reuse_deb: ${{ steps.version-check.outputs.reuse_deb }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Compare tweak version with latest release
+        id: version-check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CONTROL_VERSION=$(grep '^Version:' control | cut -d ' ' -f 2)
+          SHOULD_RUN=true
+          DO_RELEASE=false
+          REUSE_DEB=false
+          # Fetch latest release (if any) once
+          set +e
+          release_json=$(gh api repos/${{ github.repository }}/releases/latest 2>/dev/null)
+          rc=$?
+          set -e
+          RELEASE_VERSION=""
+          if [ $rc -eq 0 ]; then
+            asset_name=$(echo "$release_json" | jq -r '.assets[] | select(.name | contains("iphoneos-arm64.deb")) | .name' | head -n1)
+            if [ -n "$asset_name" ]; then
+              RELEASE_VERSION=$(echo "$asset_name" | grep -o '_[0-9.]\+_' | tr -d '_')
+            fi
+          fi
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" = "$CONTROL_VERSION" ]; then
+              REUSE_DEB=true
+            fi
+            if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" = "$CONTROL_VERSION" ]; then
+              echo "Latest release version ($RELEASE_VERSION) matches control ($CONTROL_VERSION); skipping build on push.";
+              SHOULD_RUN=false
+            else
+              DO_RELEASE=true
+            fi
+          echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
+          echo "do_release=$DO_RELEASE" >> $GITHUB_OUTPUT
+          echo "reuse_deb=$REUSE_DEB" >> $GITHUB_OUTPUT
+          echo "Control version: $CONTROL_VERSION (release? $DO_RELEASE, run? $SHOULD_RUN)"
+
+  build-tweak:
+    runs-on: macos-15
+    needs: precheck
+    if: needs.precheck.outputs.should_run == 'true'
+    outputs:
+      deb_url: ${{ steps.upload-deb.outputs.artifact-url }}
+      deb_filename: ${{ steps.set-deb-filename.outputs.filename }}
+    env:
+      DEB_DOWNLOADED: false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Reuse existing DEB from latest release
+        if: needs.precheck.outputs.reuse_deb == 'true'
+        run: |
+          echo "Reusing existing release assets (version matches control)."
+          release_info=$(gh api --header 'Accept: application/vnd.github+json' repos/${{ github.repository }}/releases/latest)
+          mkdir -p packages
+          cd packages
+          echo "$release_info" | jq -r '.assets[] | select(.name | endswith("arm64.deb")) | .browser_download_url' | while read url; do
+            [ -n "$url" ] && curl -L -O "$url";
+          done
+          echo "DEB_DOWNLOADED=true" >> $GITHUB_ENV
+
+      - name: Check cache
+        if: env.DEB_DOWNLOADED == 'false'
+        run: echo upstream_heads=`git ls-remote https://github.com/theos/theos | head -n 1 | cut -f 1`-`git ls-remote https://github.com/theos/sdks | head -n 1 | cut -f 1` >> $GITHUB_ENV
+
+      - name: Use cache
+        if: env.DEB_DOWNLOADED == 'false'
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: ${{ runner.os }}-${{ env.upstream_heads }}
+
+      - name: Prepare Theos
+        if: env.DEB_DOWNLOADED == 'false'
+        uses: Randomblock1/theos-action@v1
+
+      - name: Build package
+        if: env.DEB_DOWNLOADED == 'false'
+        run: gmake package
+
+      - name: Upload rootless package
+        id: upload-deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootless package
+          path: packages/*.deb
+
+      - name: Set deb filename
+        id: set-deb-filename
+        run: |
+          DEB_FILE=$(ls packages/*.deb)
+          DEB_FILENAME=$(basename "$DEB_FILE")
+          echo "filename=$DEB_FILENAME" >> $GITHUB_OUTPUT
+
+  release-tweak:
+    if: needs.precheck.outputs.do_release == 'true'
+    runs-on: macos-15
+    needs: [precheck, build-tweak]
+    outputs:
+      assets: ${{ steps.release_outputs.outputs.assets }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+
+      - name: Get version
+        id: get_version
+        run: echo "version=$(cat control | grep '^Version:' | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}
+          files: |
+            ${{ needs.build-tweak.outputs.deb_filename }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          token: ${{ env.GITHUB_TOKEN }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set release outputs
+        id: release_outputs
+        run: |
+          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/v${{ env.AUDIBLE_VERSION }} | jq -r '.id')
+          ASSETS=$(gh api repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+          echo "assets=$ASSETS" >> $GITHUB_OUTPUT
+
+  apt-repo:
+    if: needs.precheck.outputs.do_release == 'true'
+    runs-on: macos-15
+    needs: [precheck, build-tweak, release-tweak]
+    steps:
+      - name: Update Repository
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          script: |
+            const assets = JSON.parse('${{ needs.release-tweak.outputs.assets }}');
+            const debAsset = assets.find(asset => asset.name === '${{ needs.build-tweak.outputs.deb_filename }}');
+
+            if (!debAsset) {
+              core.setFailed('Could not find DEB asset in release');
+              return;
+            }
+            
+            await github.rest.repos.createDispatchEvent({
+              owner: 'castdrian',
+              repo: 'apt-repo',
+              event_type: 'package-update',
+              client_payload: {
+                package_url: debAsset.browser_download_url,
+                package_name: '${{ needs.build-tweak.outputs.deb_filename }}'
+              }
+            });

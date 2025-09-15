@@ -1,0 +1,5 @@
+*.ipa
+.theos
+.DS_Store
+packages
+venv
