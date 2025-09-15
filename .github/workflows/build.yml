@@ -53,6 +53,7 @@ jobs:
             else
               DO_RELEASE=true
             fi
+          fi
           echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
           echo "do_release=$DO_RELEASE" >> $GITHUB_OUTPUT
           echo "reuse_deb=$REUSE_DEB" >> $GITHUB_OUTPUT
