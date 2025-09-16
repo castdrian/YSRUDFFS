@@ -43,16 +43,13 @@ jobs:
             fi
           fi
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" = "$CONTROL_VERSION" ]; then
-              REUSE_DEB=true
-            fi
-            if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" = "$CONTROL_VERSION" ]; then
-              echo "Latest release version ($RELEASE_VERSION) matches control ($CONTROL_VERSION); skipping build on push.";
-              SHOULD_RUN=false
-            else
-              DO_RELEASE=true
-            fi
+          # Decide whether to build and/or create a release
+          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" = "$CONTROL_VERSION" ]; then
+            echo "Latest release version ($RELEASE_VERSION) matches control ($CONTROL_VERSION); skipping build.";
+            SHOULD_RUN=false
+            REUSE_DEB=true
+          else
+            DO_RELEASE=true
           fi
           echo "should_run=$SHOULD_RUN" >> $GITHUB_OUTPUT
           echo "do_release=$DO_RELEASE" >> $GITHUB_OUTPUT
@@ -154,8 +151,8 @@ jobs:
       - name: Set release outputs
         id: release_outputs
         run: |
-          RELEASE_ID=$(gh api repos/${{ github.repository }}/releases/tags/v${{ env.AUDIBLE_VERSION }} | jq -r '.id')
-          ASSETS=$(gh api repos/${{ github.repository }}/releases/$RELEASE_ID/assets)
+          RELEASE_JSON=$(gh api repos/${{ github.repository }}/releases/tags/v${{ steps.get_version.outputs.version }})
+          ASSETS=$(echo "$RELEASE_JSON" | jq -c '.assets')
           echo "assets=$ASSETS" >> $GITHUB_OUTPUT
 
   apt-repo:
