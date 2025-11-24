@@ -19,7 +19,7 @@ jobs:
       reuse_deb: ${{ steps.version-check.outputs.reuse_deb }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Compare tweak version with latest release
         id: version-check
@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -127,7 +127,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Download build artifacts
         uses: actions/download-artifact@v5
