@@ -106,7 +106,7 @@ jobs:
 
       - name: Upload rootless package
         id: upload-deb
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: rootless package
           path: packages/*.deb
